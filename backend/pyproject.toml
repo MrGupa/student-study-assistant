@@ -12,6 +12,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=2.1.0",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
     "uvicorn>=0.49.0",
@@ -35,3 +36,8 @@ indent-style = "space"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
