@@ -15,7 +15,25 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         env_prefix="SSA_",
+        extra="ignore",
     )
+
+    database_host: str = "localhost"
+    database_port: int = 5432
+    database_name: str = "student_study_assistant"
+    database_user: str = "ssa_user"
+    database_password: str = ""
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+psycopg://"
+            f"{self.database_user}:"
+            f"{self.database_password}@"
+            f"{self.database_host}:"
+            f"{self.database_port}/"
+            f"{self.database_name}"
+        )
 
 
 settings = Settings()
