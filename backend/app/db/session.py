@@ -19,6 +19,7 @@ SessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Provide a database session for a single request."""
 
