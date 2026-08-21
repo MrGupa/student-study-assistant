@@ -12,7 +12,6 @@ class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-
     async def get_by_id(self, user_id: UUID) -> User | None:
         """Retrieve a user by ID."""
 
