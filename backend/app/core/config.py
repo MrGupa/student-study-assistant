@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -48,4 +53,4 @@ class Settings(BaseSettings):
         )
 
 
-settings = Settings()
+settings = Settings() # type: ignore[call-arg]
