@@ -26,3 +26,15 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         default=True,
         nullable=False,
     )
+
+    password_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    google_id: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=True,
+    )
+
