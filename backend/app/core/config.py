@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.common.enums import Environment
@@ -29,6 +31,11 @@ class Settings(BaseSettings):
     test_database_name: str = "student_study_assistant_test"
     database_user: str = "ssa_user"
     database_password: str = ""
+
+    refresh_cookie_name: str = "ssa_refresh_token"
+    refresh_cookie_secure: bool = True
+    refresh_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    refresh_cookie_path: str = "/api/v1/auth"
 
     @property
     def database_url(self) -> str:
