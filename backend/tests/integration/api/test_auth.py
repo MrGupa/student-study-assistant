@@ -3,9 +3,47 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import verify_password
+from app.auth.password import hash_password, verify_password
 from app.core.config import settings
 from app.db.models.user import User
+
+
+def assert_refresh_cookie(response) -> None:
+    """Verify refresh-token cookie security attributes."""
+    set_cookie = response.headers["set-cookie"]
+
+    assert settings.refresh_cookie_name in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert f"Path={settings.refresh_cookie_path}" in set_cookie
+    assert f"SameSite={settings.refresh_cookie_samesite}" in set_cookie
+
+    if settings.refresh_cookie_secure:
+        assert "Secure" in set_cookie
+
+
+def assert_public_user_response(user: dict) -> None:
+    """Ensure only public user fields are returned."""
+    assert set(user.keys()) == {
+        "id",
+        "email",
+        "full_name",
+        "is_active",
+    }
+
+    assert user["id"]
+    assert user["is_active"] is True
+
+
+def assert_invalid_credentials_response(response) -> None:
+    """Verify the generic invalid-credentials response."""
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
@@ -29,30 +67,20 @@ async def test_successful_registration(
     data = response.json()
     user = data["user"]
 
-    assert user["id"] is not None
+    assert_public_user_response(user)
+
     assert user["email"] == payload["email"]
     assert user["full_name"] == payload["full_name"]
-    assert user["is_active"] is True
-
-    assert "password" not in data
-    assert "password_hash" not in data
 
     assert data["access_token"]
     assert data["token_type"] == "bearer"
 
-    # Refresh token must not be exposed in the JSON body.
+    # Sensitive credentials must not be exposed in the JSON response.
+    assert "password" not in data
+    assert "password_hash" not in data
     assert "refresh_token" not in data
 
-    # Verify refresh token is issued through the cookie.
-    set_cookie = response.headers["set-cookie"]
-
-    assert settings.refresh_cookie_name in set_cookie
-    assert "HttpOnly" in set_cookie
-    assert f"Path={settings.refresh_cookie_path}" in set_cookie
-    assert f"SameSite={settings.refresh_cookie_samesite}" in set_cookie
-
-    if settings.refresh_cookie_secure:
-        assert "Secure" in set_cookie
+    assert_refresh_cookie(response)
 
 
 @pytest.mark.anyio
@@ -66,14 +94,13 @@ async def test_registration_with_existing_email(
         "password": "SecurePassword123!",
     }
 
-    # First registration should succeed.
     first_response = await async_client.post(
         "/api/v1/auth/register",
         json=payload,
     )
+
     assert first_response.status_code == 201
 
-    # Registering with the same email should fail.
     second_response = await async_client.post(
         "/api/v1/auth/register",
         json=payload,
@@ -88,15 +115,13 @@ async def test_registration_with_invalid_email(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "email": "invalid-email",
-        "full_name": "Test User",
-        "password": "SecurePassword123!",
-    }
-
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "invalid-email",
+            "full_name": "Test User",
+            "password": "SecurePassword123!",
+        },
     )
 
     assert response.status_code == 422
@@ -110,15 +135,13 @@ async def test_registration_with_weak_password(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "email": "test@example.com",
-        "full_name": "Test User",
-        "password": "weak",
-    }
-
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "test@example.com",
+            "full_name": "Test User",
+            "password": "weak",
+        },
     )
 
     assert response.status_code == 422
@@ -132,14 +155,12 @@ async def test_registration_with_missing_email(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "full_name": "Test User",
-        "password": "SecurePassword123!",
-    }
-
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "full_name": "Test User",
+            "password": "SecurePassword123!",
+        },
     )
 
     assert response.status_code == 422
@@ -153,21 +174,17 @@ async def test_email_normalization_during_registration(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "email": "TEST@example.com",
-        "full_name": "Test User",
-        "password": "SecurePassword123!",
-    }
-
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "TEST@example.com",
+            "full_name": "Test User",
+            "password": "SecurePassword123!",
+        },
     )
 
     assert response.status_code == 201
-
-    data = response.json()
-    assert data["user"]["email"] == "test@example.com"
+    assert response.json()["user"]["email"] == "test@example.com"
 
 
 @pytest.mark.anyio
@@ -175,21 +192,17 @@ async def test_full_name_normalization_during_registration(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "email": "test@example.com",
-        "full_name": "  Test User  ",
-        "password": "SecurePassword123!",
-    }
-
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "test@example.com",
+            "full_name": "  Test User  ",
+            "password": "SecurePassword123!",
+        },
     )
 
     assert response.status_code == 201
-
-    data = response.json()
-    assert data["user"]["full_name"] == "Test User"
+    assert response.json()["user"]["full_name"] == "Test User"
 
 
 @pytest.mark.anyio
@@ -198,52 +211,248 @@ async def test_password_stored_as_hash(
     override_get_db: None,
     db_session: AsyncSession,
 ) -> None:
-    payload = {
-        "email": "test@example.com",
-        "full_name": "Test User",
-        "password": "SecurePassword123!",
-    }
+    password = "SecurePassword123!"
 
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "test@example.com",
+            "full_name": "Test User",
+            "password": password,
+        },
     )
 
     assert response.status_code == 201
 
-    result = await db_session.execute(select(User).where(User.email == payload["email"]))
+    result = await db_session.execute(select(User).where(User.email == "test@example.com"))
     user = result.scalar_one()
 
     assert user.password_hash is not None
-    assert user.password_hash != payload["password"]
-    assert verify_password(payload["password"], user.password_hash)
+    assert user.password_hash != password
+    assert verify_password(password, user.password_hash)
 
 
 @pytest.mark.anyio
-async def test_refresh_token_cookie_attributes(
+async def test_registration_refresh_cookie_attributes(
     async_client: AsyncClient,
     override_get_db: None,
 ) -> None:
-    payload = {
-        "email": "test@example.com",
-        "full_name": "Test User",
-        "password": "SecurePassword123!",
-    }
-
-    # Registration issues the refresh-token cookie.
     response = await async_client.post(
         "/api/v1/auth/register",
-        json=payload,
+        json={
+            "email": "test@example.com",
+            "full_name": "Test User",
+            "password": "SecurePassword123!",
+        },
     )
 
     assert response.status_code == 201
+    assert_refresh_cookie(response)
 
-    set_cookie = response.headers["set-cookie"]
 
-    assert settings.refresh_cookie_name in set_cookie
-    assert "HttpOnly" in set_cookie
-    assert f"Path={settings.refresh_cookie_path}" in set_cookie
-    assert f"SameSite={settings.refresh_cookie_samesite}" in set_cookie
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
 
-    if settings.refresh_cookie_secure:
-        assert "Secure" in set_cookie
+
+@pytest.mark.anyio
+async def test_nonexistent_user_login(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "nonexistent@example.com",
+            "password": "AnyPassword123!",
+        },
+    )
+
+    assert_invalid_credentials_response(response)
+
+
+@pytest.mark.anyio
+async def test_google_only_account_login(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="googleuser@example.com",
+        full_name="Google User",
+        password_hash=None,
+        google_id="google-sub-123",
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "googleuser@example.com",
+            "password": "GooglePassword123!",
+        },
+    )
+
+    assert_invalid_credentials_response(response)
+
+
+@pytest.mark.anyio
+async def test_inactive_user_login(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="inactiveuser@example.com",
+        full_name="Inactive User",
+        password_hash=hash_password("InactivePassword123!"),
+        is_active=False,
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "inactiveuser@example.com",
+            "password": "InactivePassword123!",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Inactive account"
+
+
+@pytest.mark.anyio
+async def test_login_with_invalid_email(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "invalid-email",
+            "password": "SecurePassword123!",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_login_with_missing_password(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "test@example.com",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_successful_login(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    password = "SecurePassword123!"
+
+    user = User(
+        email="loginuser@example.com",
+        full_name="Login User",
+        password_hash=hash_password(password),
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "loginuser@example.com",
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    response_user = data["user"]
+
+    assert_public_user_response(response_user)
+
+    assert response_user["email"] == "loginuser@example.com"
+    assert response_user["full_name"] == "Login User"
+
+    assert data["access_token"]
+    assert data["token_type"] == "bearer"
+
+    # Sensitive credentials must not be exposed in the JSON response.
+    assert "password" not in response_user
+    assert "password_hash" not in response_user
+    assert "refresh_token" not in data
+
+    assert_refresh_cookie(response)
+
+
+@pytest.mark.anyio
+async def test_login_with_incorrect_password(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="loginuser@example.com",
+        full_name="Login User",
+        password_hash=hash_password("CorrectPassword123!"),
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "loginuser@example.com",
+            "password": "WrongPassword123!",
+        },
+    )
+
+    assert_invalid_credentials_response(response)
+
+
+@pytest.mark.anyio
+async def test_login_refresh_cookie_attributes(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    password = "SecurePassword123!"
+
+    user = User(
+        email="cookieuser@example.com",
+        full_name="Cookie User",
+        password_hash=hash_password(password),
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "cookieuser@example.com",
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    assert_refresh_cookie(response)
