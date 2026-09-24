@@ -28,7 +28,7 @@ class UserRepository:
 
         return result.scalar_one_or_none()
 
-    async def create(self, *, email: str, full_name: str, password_hash: str) -> User:
+    async def create(self, *, email: str, full_name: str, password_hash: str|None) -> User:
         """Create and persist a user."""
 
         user = User(

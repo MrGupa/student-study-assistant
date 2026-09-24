@@ -6,8 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import verify_password
-from app.common.exceptions import EmailAlreadyRegisteredError
+from app.auth.password import hash_password, verify_password
+from app.common.exceptions import (
+    AccountInactiveError,
+    EmailAlreadyRegisteredError,
+    InvalidCredentialsError,
+)
 from app.db.models import User
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
@@ -141,3 +145,117 @@ async def test_register_reraises_unrelated_integrity_error(
             )
 
     assert exc_info.value is integrity_error
+
+
+@pytest.mark.anyio
+async def test_login_with_valid_credentials(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    password = "StrongPassword123!"
+    password_hash = hash_password(password)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=password_hash,
+    )
+
+    authenticated_user = await auth_service.login(
+        email="student@example.com",
+        password=password,
+    )
+
+    assert authenticated_user.id == user.id
+    assert authenticated_user.email == user.email
+
+
+@pytest.mark.anyio
+async def test_login_normalizes_email(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    password = "StrongPassword123!"
+    password_hash = hash_password(password)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=password_hash,
+    )
+
+    authenticated_user = await auth_service.login(
+        email="  STUDENT@EXAMPLE.COM  ",
+        password=password,
+    )
+
+    assert authenticated_user.id == user.id
+
+
+@pytest.mark.anyio
+async def test_login_rejects_incorrect_password(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=hash_password("CorrectPassword123!"),
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.login(
+            email="student@example.com",
+            password="WrongPassword123!",
+        )
+
+
+@pytest.mark.anyio
+async def test_login_rejects_nonexistent_email(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.login(
+            email="unknown@example.com",
+            password="StrongPassword123!",
+        )
+
+
+@pytest.mark.anyio
+async def test_login_rejects_google_only_account(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    await user_repository.create(
+        email="google@example.com",
+        full_name="Google Student",
+        password_hash=None,
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.login(
+            email="google@example.com",
+            password="StrongPassword123!",
+        )
+
+
+@pytest.mark.anyio
+async def test_login_rejects_inactive_user(db_session):
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="inactive@example.com",
+        full_name="Inactive Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    user.is_active = False
+    await db_session.flush()
+
+    with pytest.raises(AccountInactiveError):
+        await auth_service.login(
+            email="inactive@example.com",
+            password="StrongPassword123!",
+        )

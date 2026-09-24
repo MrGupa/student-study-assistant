@@ -1,8 +1,12 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.password import hash_password
-from app.common.exceptions import EmailAlreadyRegisteredError
+from app.auth.password import hash_password, verify_password
+from app.common.exceptions import (
+    AccountInactiveError,
+    EmailAlreadyRegisteredError,
+    InvalidCredentialsError,
+)
 from app.db.models import User
 from app.repositories.user_repository import UserRepository
 
@@ -61,5 +65,27 @@ class AuthService:
         except Exception:
             await self._session.rollback()
             raise
+
+        return user
+
+    async def login(
+        self,
+        *,
+        email: str,
+        password: str,
+    ) -> User:
+        """Authenticate a user with email and password."""
+
+        normalized_email = email.strip().lower()
+        user = await self._repository.get_by_email(normalized_email)
+
+        if user is None or user.password_hash is None:
+            raise InvalidCredentialsError("Invalid email or password.")
+
+        if not verify_password(password, user.password_hash):
+            raise InvalidCredentialsError("Invalid email or password.")
+
+        if not user.is_active:
+            raise AccountInactiveError("Inactive user.")
 
         return user
