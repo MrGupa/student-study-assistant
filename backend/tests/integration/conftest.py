@@ -50,3 +50,16 @@ async def test_user(db_session: AsyncSession) -> User:
     await db_session.flush()
 
     return user
+
+
+@pytest.fixture
+async def another_user(db_session: AsyncSession) -> User:
+    user = User(
+        email="anotheruser@example.com",
+        full_name="Another User",
+    )
+
+    db_session.add(user)
+    await db_session.flush()
+
+    return user
