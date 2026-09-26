@@ -1,13 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Cookie, Depends, Response, status
 
 from app.auth.jwt import create_access_token, create_refresh_token
+from app.common.exceptions import InvalidCredentialsError
 from app.core.config import settings
 from app.db.dependencies import get_auth_service
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    RefreshResponse,
     RegisteredUserResponse,
     RegistrationRequest,
     RegistrationResponse,
@@ -57,6 +59,7 @@ async def register(
         access_token=access_token,
     )
 
+
 @router.post(
     "/auth/login",
     response_model=LoginResponse,
@@ -95,3 +98,26 @@ async def login(
         user=RegisteredUserResponse.model_validate(user),
         access_token=access_token,
     )
+
+
+@router.post(
+    "/auth/refresh",
+    response_model=RefreshResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Auth"],
+)
+async def refresh(
+    service: Annotated[AuthService, Depends(get_auth_service)],
+    refresh_token: Annotated[
+        str | None,
+        Cookie(alias=settings.refresh_cookie_name),
+    ] = None,
+) -> RefreshResponse:
+    """Issue a new access token using the refresh-token cookie."""
+
+    if refresh_token is None:
+        raise InvalidCredentialsError("Invalid refresh token.")
+
+    access_token = await service.refresh(refresh_token)
+
+    return RefreshResponse(access_token=access_token)

@@ -1,17 +1,27 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
+import jwt
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import (
+    AccessTokenClaims,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+)
 from app.auth.password import hash_password, verify_password
 from app.common.exceptions import (
     AccountInactiveError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
 )
+from app.core.config import settings
 from app.db.models import User
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
@@ -259,3 +269,172 @@ async def test_login_rejects_inactive_user(db_session):
             email="inactive@example.com",
             password="StrongPassword123!",
         )
+
+
+@pytest.mark.anyio
+async def test_refresh_returns_new_access_token(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    refresh_token = create_refresh_token(user.id)
+
+    # Act
+    access_token = await auth_service.refresh(refresh_token)
+
+    # Assert
+    access_claims = decode_token(access_token)
+
+    assert isinstance(access_claims, AccessTokenClaims)
+    assert access_claims.sub == user.id
+    assert access_claims.type.value == "access"
+    assert access_claims.email == user.email
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_access_token(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    access_token = create_access_token(
+        user_id=user.id,
+        email=user.email,
+    )
+
+    # Act & Assert
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.refresh(access_token)
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_nonexistent_user(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    refresh_token = create_refresh_token(uuid4())
+
+    # Act & Assert
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.refresh(refresh_token)
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_inactive_user(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="inactive@example.com",
+        full_name="Inactive Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    user.is_active = False
+    await db_session.flush()
+
+    refresh_token = create_refresh_token(user.id)
+
+    # Act & Assert
+    with pytest.raises(AccountInactiveError):
+        await auth_service.refresh(refresh_token)
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_expired_token(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    expired_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    expired_refresh_token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "type": "refresh",
+            "iat": int((expired_time - timedelta(minutes=5)).timestamp()),
+            "exp": int(expired_time.timestamp()),
+            "jti": str(uuid4()),
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    # Act & Assert
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.refresh(expired_refresh_token)
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_invalid_signature(
+    db_session: AsyncSession,
+) -> None:
+    # Arrange
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    user = await user_repository.create(
+        email="student@example.com",
+        full_name="Test Student",
+        password_hash=hash_password("StrongPassword123!"),
+    )
+
+    valid_refresh_token = create_refresh_token(user.id)
+
+    token_payload = jwt.decode(
+        valid_refresh_token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_signature": False},
+    )
+
+    invalid_signature_token = jwt.encode(
+        token_payload,
+        "different-secret-that-is-at-least-32-bytes",
+        algorithm=settings.jwt_algorithm,
+    )
+
+    # Act & Assert
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.refresh(invalid_signature_token)
+
+
+@pytest.mark.anyio
+async def test_refresh_rejects_malformed_token(
+    db_session: AsyncSession,
+) -> None:
+    user_repository = UserRepository(db_session)
+    auth_service = AuthService(user_repository, db_session)
+
+    with pytest.raises(InvalidCredentialsError):
+        await auth_service.refresh("not-a-jwt")

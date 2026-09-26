@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    RefreshResponse,
     RegisteredUserResponse,
     RegistrationRequest,
     RegistrationResponse,
@@ -158,3 +159,14 @@ def test_login_response_excludes_internal_user_fields() -> None:
     assert "password_hash" not in response_data["user"]
     assert "google_id" not in response_data["user"]
     assert response_data["token_type"] == "bearer"
+
+
+def test_refresh_response() -> None:
+    response = RefreshResponse(access_token="test-token")
+
+    assert response.access_token == "test-token"
+    assert response.token_type == "bearer"
+    assert set(response.model_dump().keys()) == {
+        "access_token",
+        "token_type",
+    }

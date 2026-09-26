@@ -55,3 +55,8 @@ class LoginResponse(BaseModel):
     user: RegisteredUserResponse
     access_token: str
     token_type: Literal["bearer"] = "bearer"
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"

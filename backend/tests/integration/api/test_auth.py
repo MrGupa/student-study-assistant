@@ -1,8 +1,12 @@
+from uuid import uuid4
+
+import jwt
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import create_access_token, create_refresh_token
 from app.auth.password import hash_password, verify_password
 from app.core.config import settings
 from app.db.models.user import User
@@ -456,3 +460,228 @@ async def test_login_refresh_cookie_attributes(
 
     assert response.status_code == 200
     assert_refresh_cookie(response)
+
+
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_successful_token_refresh(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="refreshuser@example.com",
+        full_name="Refresh User",
+        password_hash=hash_password("RefreshPassword123!"),
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    refresh_token = create_refresh_token(user.id)
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        refresh_token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["access_token"]
+    assert data["token_type"] == "bearer"
+
+    assert set(data.keys()) == {
+        "access_token",
+        "token_type",
+    }
+
+    assert "refresh_token" not in data
+    assert "user" not in data
+
+
+@pytest.mark.anyio
+async def test_refresh_without_cookie(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_invalid_token(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        "not-a-valid-jwt",
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_access_token(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="access-token-refresh@example.com",
+        full_name="Access Token User",
+        password_hash=hash_password("AccessPassword123!"),
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    access_token = create_access_token(
+        user_id=user.id,
+        email=user.email,
+    )
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        access_token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_inactive_user(
+    async_client: AsyncClient,
+    override_get_db: None,
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        email="inactive-refresh@example.com",
+        full_name="Inactive Refresh User",
+        password_hash=hash_password("InactivePassword123!"),
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    refresh_token = create_refresh_token(user.id)
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        refresh_token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Inactive account"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_nonexistent_user(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    refresh_token = create_refresh_token(uuid4())
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        refresh_token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_expired_token(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    expired_token = jwt.encode(
+        {
+            "sub": str(uuid4()),
+            "iat": 1,
+            "exp": 2,
+            "jti": str(uuid4()),
+            "type": "refresh",
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        expired_token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_refresh_with_invalid_signature(
+    async_client: AsyncClient,
+    override_get_db: None,
+) -> None:
+    token = jwt.encode(
+        {
+            "sub": str(uuid4()),
+            "iat": 1,
+            "exp": 4_102_444_800,
+            "jti": str(uuid4()),
+            "type": "refresh",
+        },
+        "different-secret-that-is-at-least-32-bytes",
+        algorithm=settings.jwt_algorithm,
+    )
+
+    async_client.cookies.set(
+        settings.refresh_cookie_name,
+        token,
+    )
+
+    response = await async_client.post(
+        "/api/v1/auth/refresh",
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+    assert response.headers["www-authenticate"] == "Bearer"

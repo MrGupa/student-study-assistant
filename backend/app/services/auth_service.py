@@ -1,6 +1,12 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import (
+    AccessTokenClaims,
+    JWTValidationError,
+    create_access_token,
+    decode_token,
+)
 from app.auth.password import hash_password, verify_password
 from app.common.exceptions import (
     AccountInactiveError,
@@ -89,3 +95,27 @@ class AuthService:
             raise AccountInactiveError("Inactive user.")
 
         return user
+
+    async def refresh(self, refresh_token: str) -> str:
+        """Create a new access token from a valid refresh token."""
+
+        try:
+            claims = decode_token(refresh_token)
+        except JWTValidationError as exc:
+            raise InvalidCredentialsError("Invalid refresh token.") from exc
+
+        if isinstance(claims, AccessTokenClaims):
+            raise InvalidCredentialsError("Invalid refresh token.")
+
+        user = await self._repository.get_by_id(claims.sub)
+
+        if user is None:
+            raise InvalidCredentialsError("Invalid refresh token.")
+
+        if not user.is_active:
+            raise AccountInactiveError("Inactive user.")
+
+        return create_access_token(
+            user_id=user.id,
+            email=user.email,
+        )
