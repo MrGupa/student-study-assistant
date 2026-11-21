@@ -417,6 +417,14 @@ Frontend Removes Access Token
 User Becomes Unauthenticated
 ```
 
+**Implementation Note**
+
+Logout clears the refresh-token cookie from the user's browser and the frontend removes the access token from memory.
+
+Because the MVP uses stateless JWT authentication, logout does not revoke previously issued refresh tokens. A copied refresh token remains valid until expiration.
+
+Server-side token revocation is deferred to a future enhancement.
+
 ---
 
 # Authorization Model
@@ -529,6 +537,7 @@ No authentication required:
 * Register
 * Login
 * Refresh Token
+* Logout
 * Forgot Password
 * Reset Password
 * Google OAuth Callback
