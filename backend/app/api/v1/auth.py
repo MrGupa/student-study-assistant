@@ -121,3 +121,20 @@ async def refresh(
     access_token = await service.refresh(refresh_token)
 
     return RefreshResponse(access_token=access_token)
+
+
+@router.post(
+    "/auth/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Auth"],
+)
+async def logout(response: Response) -> None:
+    """Clear the refresh-token cookie and log out the user."""
+
+    response.delete_cookie(
+        key=settings.refresh_cookie_name,
+        path=settings.refresh_cookie_path,
+        secure=settings.refresh_cookie_secure,
+        httponly=True,
+        samesite=settings.refresh_cookie_samesite,
+    )

@@ -685,3 +685,48 @@ async def test_refresh_with_invalid_signature(
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid email or password"
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+# ---------------------------------------------------------------------------
+# Logout
+# ---------------------------------------------------------------------------
+
+
+def assert_refresh_cookie_cleared(response) -> None:
+    """Verify that the refresh-token cookie is instructed to expire."""
+    set_cookie = response.headers["set-cookie"]
+
+    assert f"{settings.refresh_cookie_name}=" in set_cookie
+    assert "Max-Age=0" in set_cookie
+    assert f"Path={settings.refresh_cookie_path}" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert f"SameSite={settings.refresh_cookie_samesite}" in set_cookie
+
+    if settings.refresh_cookie_secure:
+        assert "Secure" in set_cookie
+
+
+@pytest.mark.anyio
+async def test_logout_clears_refresh_cookie(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+    assert_refresh_cookie_cleared(response)
+
+
+@pytest.mark.anyio
+async def test_logout_is_idempotent(
+    async_client: AsyncClient,
+) -> None:
+    first_response = await async_client.post("/api/v1/auth/logout")
+    second_response = await async_client.post("/api/v1/auth/logout")
+
+    assert first_response.status_code == 204
+    assert second_response.status_code == 204
+
+    assert_refresh_cookie_cleared(first_response)
+    assert_refresh_cookie_cleared(second_response)
